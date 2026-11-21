@@ -81,7 +81,7 @@ module v06c_system (
 	output wire  [8:0] vc,
 	output wire        ce_pix,         // ce_12mp: a pixel of the raster
 
-	output wire [15:0] audio_l,        // unsigned, as AUDIO_L of the MiSTer core
+	output wire [15:0] audio_l,        // two's complement (kg_pcm5102, hdmi_tx)
 	output wire [15:0] audio_r,
 	output wire        tape_out,
 
@@ -624,9 +624,13 @@ always @(posedge clk) begin
 	else if (~vox_we_d & vox_we) covox <= cpu_o;
 end
 
-// without the AY: {legacy, 8'd0} + {covox, 1'b0}, as AUDIO_L of the MiSTer core (11 bits used)
+// The mix of the MiSTer core (without the AY): {legacy, 8'd0} + {covox, 1'b0}, 0..1534, unsigned there
+// (AUDIO_S 0). karabas: the DAC and HDMI take two's complement: the mix centred on 0 (- 767) and x 16,
+// +-12272 (-8.5 dBFS, room for the AY of Ф3). Taken unsigned, the three 8253 channels and the beeper
+// all high gave 8000, the most negative value: the sound broke up on the DAC (user 2026-11-21).
 wire [10:0] mix = {legacy_audio, 8'd0} + {2'b00, covox, 1'b0};
-assign audio_l = {mix, 5'd0};
-assign audio_r = {mix, 5'd0};
+wire signed [15:0] mix_s = ($signed({5'd0, mix}) - 16'sd767) <<< 4;
+assign audio_l = mix_s;
+assign audio_r = mix_s;
 
 endmodule
