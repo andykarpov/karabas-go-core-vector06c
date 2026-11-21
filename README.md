@@ -12,7 +12,7 @@ A core of the Soviet home computer [Vector-06C](https://en.wikipedia.org/wiki/Ve
 
 The core file `src/vector06c.kg` is one file for all three boards.
 
-Status: checked on Mini G (the boot ROM, MicroDOS from a floppy image, drive B, programs, the 8253 sound). The Go and Mini builds have not been run on a board yet.
+Status: checked on Mini G (the boot ROM, MicroDOS from a floppy image, drive B, programs, a program from a `.wav` tape, the 8253 sound, the AY). The Go and Mini builds have not been run on a board yet.
 
 Contents: [Getting started](#getting-started) · [OSD menu](#osd-menu) · [Keys](#keys) · [Files](#files) · [Where to get software](#where-to-get-software) · [How the core works](#how-the-core-works) · [Building](#building) · [Tests](#tests) · [Licence and sources](#licence-and-sources)
 
@@ -22,6 +22,9 @@ Contents: [Getting started](#getting-started) · [OSD menu](#osd-menu) · [Keys]
 2. Choose Vector-06C in the core menu. The boot ROM («Загрузчик») shows its screen: ВЕКТОР-06Ц, a tape icon, the tape bars. It waits for a tape or a disk.
 3. A program: open the OSD (**Menu+Esc**), Files → ROM file (**Menu+F2**). It starts at once.
 4. A disk: Disks → Disk A (**Menu+F7**). The boot ROM restarts and loads the boot sectors (a floppy icon, the bars fill). Then **Start** (**Menu+F11**, the БЛК+ВВОД of the original) runs it: a MicroDOS disk comes to `A>`.
+5. A tape: Files → Tape .wav (**Menu+F4**) while the boot ROM waits (Reset, **F12**). The recording plays, the boot ROM loads it block by block (a tape icon, the bar fills); at the end **Start** runs the program. The boot ROM takes a mounted disk A first: eject it to load from the tape.
+
+The OSD remembers the disk images: a core loaded again mounts them again.
 
 "Menu" is the Windows key of the keyboard.
 
