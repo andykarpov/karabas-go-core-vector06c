@@ -12,6 +12,7 @@
 //   --io N                print the first N IN / OUT cycles
 //   --disk MS:FILE        mount FILE on drive A (F slot 4) at MS
 //   --pc MS1:MS2          print the opcode fetch addresses between MS1 and MS2
+//   --expect-disk OFF:VAL a byte of the image of drive A at the end (after the writes)
 //   --trace               print the CPU address every 1 ms
 // Prints the frames, the interrupt acknowledges and the clocks of 48 MHz between the last two of them.
 #include <cstdio>
@@ -148,6 +149,7 @@ int main(int argc, char **argv) {
 	std::vector<std::pair<std::string, uint32_t>> roms;
 	std::vector<std::pair<uint32_t, int>> expects;
 	std::vector<uint32_t> peeks;
+	std::vector<std::pair<uint32_t, int>> dexp;
 	std::vector<Ev> evs;
 	int ms = 1000;
 	const char *frame = nullptr, *frame2x = nullptr;
@@ -193,6 +195,7 @@ int main(int argc, char **argv) {
 			fclose(f);
 			has_disk = true;
 		}
+		else if (!strcmp(argv[i], "--expect-disk")) { std::string a = argv[++i]; size_t c = a.find(':'); dexp.push_back({ (uint32_t)strtoul(a.c_str(), nullptr, 0), (int)strtol(a.c_str() + c + 1, nullptr, 0) }); }
 		else if (!strcmp(argv[i], "--turbo")) turbo = true;
 		else if (!strcmp(argv[i], "--trace")) trace = true;
 		else if (!strcmp(argv[i], "--io")) io_n = atoi(argv[++i]);
@@ -220,6 +223,7 @@ int main(int argc, char **argv) {
 
 	static uint32_t img[312][768];
 	std::vector<uint32_t> cur(768 * 312, 0);
+	int err_d = 0;
 	int frames = 0, acks = 0; long snd_edges = 0;
 	uint64_t last_ack = 0, ack_period = 0, ack_min = UINT64_MAX, ack_max = 0;
 	bool prev_ack = false, prev_vs = false, have_frame = false;
@@ -323,6 +327,7 @@ int main(int argc, char **argv) {
 		for (uint32_t a = 0x8000; a < 0x10000; a++) if (peek(a)) nz[(a >> 13) & 3]++;
 		printf("screen bytes not 0: 8000 %d, A000 %d, C000 %d, E000 %d\n", nz[0], nz[1], nz[2], nz[3]);
 	}
+	for (auto &e : dexp) { int v = e.first < disks[4].size() ? disks[4][e.first] : -1; if (v != e.second) { printf("expect disk %06X = %02X, got %02X\n", e.first, e.second, v); err_d = 1; } }
 	for (uint32_t a : peeks) printf("peek %06X = %02X\n", a, peek(a));
 	if (has_disk) printf("disk: %d sectors read, %d written\n", disk_reads, disk_writes);
 	printf("sound changes %ld\n", snd_edges);
@@ -334,7 +339,7 @@ int main(int argc, char **argv) {
 			for (int x = 0; x < 640; x++) { uint32_t v = o_img[y][x]; fputc(v >> 16, f); fputc(v >> 8, f); fputc(v, f); }
 		fclose(f);
 	}
-	int err = 0;
+	int err = err_d;
 	for (auto &e : expects) {
 		int v = peek(e.first);
 		if (v != e.second) { printf("expect %06X = %02X, got %02X\n", e.first, e.second, v); err = 1; }

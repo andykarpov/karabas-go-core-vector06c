@@ -1,7 +1,7 @@
 {
     "id": "vector06c",
     "name": "Vector-06C",
-    "build": "26112103",
+    "build": "26112104",
     "visible": true,
     "type": "osd",
     "order": 40,
@@ -15,7 +15,7 @@
     "boards": {
         "minig": {
             "link": 2,
-            "build": "26112103",
+            "build": "26112104",
             "bitstream": "karabas_minig.bin"
         }
     },

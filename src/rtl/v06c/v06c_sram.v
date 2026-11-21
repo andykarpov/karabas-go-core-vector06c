@@ -98,6 +98,14 @@ reg [7:0] din_q = 8'd0;
 reg [7:0] din_hi_q = 8'd0;
 reg wr16_q = 1'b0;
 
+// karabas (v06c): the machine first. The CPU of the Vector takes its data some 8 clocks after a new
+// address (the MiSTer core had a block RAM, one clock): with the slots alternating between the
+// machine and the aux port (spec_sram) a read took up to 9 and the CPU got the byte of the address
+// before while the disk cache filled (JNZ 010A went to 000A). Now the aux port gets a slot only
+// when the machine has its byte (dout of addr_q) and no write waits: a read of the machine takes 5
+// to 7 clocks, the aux port the slots between (the CPU changes its address once in 16 clocks or less often).
+wire mach_need = !(dout_v && dout_addr == addr_q) || (we_q && !we_d);
+
 always @(posedge clk) begin
 	addr_q <= addr;
 	we_q <= we;
@@ -165,16 +173,6 @@ always @(posedge clk) begin
 			s_vid <= 1'b1;
 			vid_pend <= 1'b0;
 		end
-		else if (aux_turn && aux_req && !aux_busy) begin
-			MA <= aux_addr[21:1];
-			s_lane <= aux_addr[0];
-			s_we <= aux_we;
-			s_data <= { aux_din, aux_din };
-			s_both <= 1'b0;
-			s_read <= !aux_we;
-			s_aux <= 1'b1;
-			aux_busy <= 1'b1;
-		end
 		else if (wr_pend && !(we_q && !we_d)) begin
 			MA <= wr_addr[21:1];
 			s_lane <= wr_addr[0];
@@ -183,6 +181,16 @@ always @(posedge clk) begin
 			s_both <= wr_both;
 			s_read <= 1'b0;
 			wr_pend <= 1'b0;
+		end
+		else if (aux_req && !aux_busy && !mach_need) begin
+			MA <= aux_addr[21:1];
+			s_lane <= aux_addr[0];
+			s_we <= aux_we;
+			s_data <= { aux_din, aux_din };
+			s_both <= 1'b0;
+			s_read <= !aux_we;
+			s_aux <= 1'b1;
+			aux_busy <= 1'b1;
 		end
 		else begin
 			MA <= addr_q[21:1];
