@@ -1,0 +1,482 @@
+`timescale 1ns / 1ps
+`default_nettype wire
+
+/*
+ v06c_system.v — the Vector-06C machine.
+
+ The machine part of Vector-06C.sv of Vector-06C_MiSTer (Sorgelig, 2016-2026, BSD-2 in its
+ LICENSE.TXT; the files keep their own headers), brought to the rules of the karabas cores:
+
+ - one clock, clk 48 MHz (the MiSTer core: 96 MHz with the enables made on the falling edge).
+   A frame of 64 clocks (div) is four T-states of the CPU at 3 MHz, the memory cycle of the Vector:
+   ce_f1 / ce_f2 the phases of the vm80a at 3 MHz (6 MHz turbo: every 8 clocks), ce_12mp / ce_12mn
+   the two halves of the 12 MHz pixel clock, clk_pit 1.5 MHz (div[4]), the wait of the CPU as
+   in the MiSTer core (the CPU waits for its slot of the memory cycle at 3 MHz).
+ - the memory is the SRAM of the board (v06c_sram, from core-specialist): byte address
+   {page[2:0], addr[15:0]} as the dpram of the MiSTer core: page 0 the main 64 KB, 1..4 the RAM
+   disk (port 10h), 5 the boot ROM (up to 32 KB, loaded by the firmware). The screen (8000-FFFF of
+   page 0) is copied into a block RAM as it is written (v06c_vram: 4 planes x 8 KB, read 32 bits
+   at once by the video), so the video never waits for the SRAM.
+ - the file loads come from kg_mcu (v06c_loader); the machine is held in reset meanwhile and
+   until the erase after a .rom is done, as the MiSTer core does.
+ - not yet (docs/PLAN.md): the Z80 (Ф4), the floppy (Ф2), the AY (Ф3), the tape (Ф4).
+*/
+
+module v06c_system (
+	input  wire        clk,            // 48 MHz
+	input  wire        reset,          // power-on / board reset: as a cold reset
+	input  wire        turbo,          // 6 MHz
+	input  wire        rst_boot,       // a pulse: reset into the boot ROM (the memory stays)
+	input  wire        rst_app,        // a pulse: reset with the boot ROM off (start the program)
+	input  wire        rst_cold,       // a pulse: clear the memory, boot ROM
+	input  wire        pal_keep,       // the palette stays on reset (MiSTer "Reset Palette: No")
+
+	// the loads of the firmware (link v2 loader signals, as spec_system)
+	input  wire        rom_active,     // the ROMs of the core file
+	input  wire [21:0] rom_addr,
+	input  wire  [7:0] rom_data,
+	input  wire        rom_wr,
+	input  wire        file_active,    // an FL item
+	input  wire  [7:0] file_slot,
+	input  wire [31:0] file_addr,
+	input  wire  [7:0] file_data,
+	input  wire        file_wr,
+
+	input  wire  [7:0] kb_scancode,
+	input  wire        kb_scancode_upd,
+	input  wire  [7:0] joy_a,          // MiSTer order: right, left, down, up, fire 1, fire 2 in bits 0..5
+	input  wire  [7:0] joy_b,
+	input  wire        tape_in,
+
+	// the video in the raster of the machine (v06c_video)
+	output wire  [7:0] pal,
+	output wire [23:0] rgb,
+	output wire        hblank,
+	output wire        vblank,
+	output wire        hsync,
+	output wire        vsync,
+	output wire        de,
+	output wire  [9:0] hc,
+	output wire  [8:0] vc,
+	output wire        ce_pix,         // ce_12mp: a pixel of the raster
+
+	output wire [15:0] audio_l,        // unsigned, as AUDIO_L of the MiSTer core
+	output wire [15:0] audio_r,
+	output wire        tape_out,
+
+	output wire        running,        // the CPU is out of reset (sim)
+	output wire [15:0] cpu_addr,       // sim
+	output wire        cpu_int_ack,    // sim: an interrupt acknowledge cycle
+
+	output wire [20:0] MA,
+	inout  wire [15:0] MD,
+	output wire  [1:0] MWR_N
+);
+
+// ---------------------------------------------------------------- clocks
+reg  [5:0] div = 6'd0;
+reg        ce_f1 = 1'b0, ce_f2 = 1'b0;
+reg        ce_12mp = 1'b0, ce_12mn = 1'b0;
+reg        clk_pit = 1'b0;
+reg        turbo_r = 1'b0;
+reg        cpu_ready = 1'b1;
+wire       cpu_sync;
+wire       mreq;
+
+always @(posedge clk) begin
+	div <= div + 1'd1;
+	if (&div) turbo_r <= turbo;
+	if (turbo_r) begin
+		ce_f1 <= !div[2] & !div[1:0];
+		ce_f2 <=  div[2] & !div[1:0];
+		cpu_ready <= 1'b1;
+	end else begin
+		ce_f1 <= !div[3] & !div[2:0];
+		ce_f2 <=  div[3] & !div[2:0];
+		if (div[5:3] == 3'b100) cpu_ready <= 1'b1;
+		else if (!div[3:1] & cpu_sync & mreq) cpu_ready <= 1'b0;
+	end
+	ce_12mp <= !div[1] & !div[0];
+	ce_12mn <=  div[1] & !div[0];
+	clk_pit <= div[4];
+end
+assign ce_pix = ce_12mp;
+
+// ---------------------------------------------------------------- reset
+wire       load_busy;              // a load or the erase after it
+wire       erasing;
+wire       load_rom_off;           // the last file load turns the boot ROM off (.rom / .com / .c00)
+wire       load_done;              // a pulse at the end of a file load
+wire [2:0] reset_key;
+reg        reset_flg = 1'b1;
+reg        cpu_reset = 1'b1;
+reg        cold_reset = 1'b1;
+reg [13:0] reset_hold = 14'd0;
+reg        rom_enable = 1'b1;
+reg        key_d = 1'b0;
+wire       key_rst = reset_key[0] & ~key_d;
+
+always @(posedge clk) begin
+	key_d <= reset_key[0];
+	if (reset | rst_cold) begin
+		reset_flg <= 1'b1;
+		rom_enable <= 1'b1;
+		cold_reset <= 1'b1;
+	end
+	if (load_busy) begin
+		reset_flg <= 1'b1;
+		cpu_reset <= 1'b1;
+		if (file_active) rom_enable <= ~load_rom_off;
+	end else begin
+		if (reset_flg) begin
+			reset_flg <= 1'b0;
+			cpu_reset <= 1'b1;
+			reset_hold <= 14'd10000;
+		end else if (reset_hold != 14'd0) reset_hold <= reset_hold - 1'd1;
+		else begin
+			cpu_reset <= 1'b0;
+			cold_reset <= 1'b0;
+		end
+		// the reset keys (F11 with Ctrl / Shift / Alt) and the OSD
+		if (key_rst | rst_boot | rst_app) begin
+			rom_enable <= ~(reset_key[2] | rst_app);   // Alt: the boot ROM off
+			reset_flg <= 1'b1;
+		end
+	end
+end
+assign running = ~cpu_reset;
+
+// ---------------------------------------------------------------- CPU
+wire [15:0] addr;
+wire  [7:0] cpu_o;
+reg   [7:0] cpu_i;
+wire        cpu_inte;
+wire        cpu_rd;
+wire        cpu_wr_n;
+reg         cpu_int = 1'b0;
+
+vm80a_core cpu (
+	.pin_clk(clk),
+	.pin_f1(ce_f1),
+	.pin_f2(ce_f2),
+	.pin_reset(cpu_reset),
+	.pin_a(addr),
+	.pin_dout(cpu_o),
+	.pin_din(cpu_i),
+	.pin_aena(),
+	.pin_dena(),
+	.pin_hold(1'b0),
+	.pin_hlda(),
+	.pin_ready(cpu_ready),
+	.pin_wait(),
+	.pin_int(cpu_int),
+	.pin_inte(cpu_inte),
+	.pin_sync(cpu_sync),
+	.pin_dbin(cpu_rd),
+	.pin_wr_n(cpu_wr_n)
+);
+assign cpu_addr = addr;
+
+reg [7:0] status_word = 8'd0;
+reg       old_sync = 1'b0;
+always @(posedge clk) begin
+	old_sync <= cpu_sync;
+	if (~old_sync & cpu_sync) status_word <= cpu_o;
+end
+
+wire int_ack  = status_word[0];
+wire write_n  = status_word[1];
+wire io_stack = status_word[2];
+wire io_write = status_word[4];
+wire io_read  = status_word[6];
+wire ram_read = status_word[7];
+assign mreq = (ram_read | ~write_n) & ~io_write & ~io_read;
+assign cpu_int_ack = int_ack & cpu_sync;
+
+wire io_rd = io_read & cpu_rd;
+wire io_wr = io_write & ~cpu_wr_n;
+
+// ---------------------------------------------------------------- I/O decode
+reg ppi1_sel, joy_sel, vox_sel, pit_sel, pal_sel, psg_sel, edsk_sel, fdd_sel;
+reg [7:0] io_data;
+wire [7:0] ppi1_o, pit_o, psg_o, fdd_o;
+wire [7:0] joyP_o, joyPU_o, joyA_o, joyB_o;
+
+always @(*) begin
+	ppi1_sel = 1'b0; joy_sel = 1'b0; vox_sel = 1'b0; pit_sel = 1'b0;
+	pal_sel = 1'b0; edsk_sel = 1'b0; psg_sel = 1'b0; fdd_sel = 1'b0;
+	io_data = 8'hFF;
+	casex (addr[7:0])
+		8'b000000XX: begin ppi1_sel = 1'b1; io_data = ppi1_o;  end
+		8'b0000010X: begin joy_sel  = 1'b1; io_data = 8'h00;   end
+		8'b00000110: begin                  io_data = joyP_o;  end
+		8'b00000111: begin vox_sel  = 1'b1; io_data = joyPU_o; end
+		8'b000010XX: begin pit_sel  = 1'b1; io_data = pit_o;   end
+		8'b0000110X: begin pal_sel  = 1'b1;                    end
+		8'b00001110: begin pal_sel  = 1'b1; io_data = joyA_o;  end
+		8'b00001111: begin pal_sel  = 1'b1; io_data = joyB_o;  end
+		8'b00010000: begin edsk_sel = 1'b1;                    end
+		8'b0001010X: begin psg_sel  = 1'b1; io_data = psg_o;   end
+		8'b000110XX: begin fdd_sel  = 1'b1; io_data = fdd_o;   end
+		8'b000111XX: begin fdd_sel  = 1'b1;                    end
+		default: ;
+	endcase
+end
+
+// karabas: not yet (Ф2 floppy, Ф3 AY)
+assign psg_o = 8'hFF;
+assign fdd_o = 8'h00;
+
+// ---------------------------------------------------------------- memory
+wire [7:0] ram_o;
+reg  [15:0] rom_size = 16'd0;
+reg  [2:0] ed_page;
+wire read_rom = rom_enable && (addr < rom_size) && !ed_page && ram_read;
+
+always @(*) begin
+	casex ({int_ack, io_read})
+		2'b01: cpu_i = io_data;
+		2'b1X: cpu_i = 8'hFF;      // RST 7
+		default: cpu_i = ram_o;
+	endcase
+end
+
+wire [18:0] ram_addr = {read_rom ? 3'h5 : ed_page, addr};
+wire        cpu_we = ~cpu_wr_n & ~io_write & ~cpu_reset;
+
+// the loader / eraser on the aux port
+wire        aux_req, aux_we, aux_ack;
+wire [21:0] aux_addr;
+wire  [7:0] aux_din, aux_dout;
+
+v06c_sram sram (
+	.clk(clk),
+	.addr({3'b000, ram_addr}),
+	.we(cpu_we),
+	.din(cpu_o),
+	.din_hi(8'd0),
+	.wr16(1'b0),
+	.dout(ram_o),
+	.rd_ok(),
+	.aux_req(aux_req),
+	.aux_we(aux_we),
+	.aux_addr(aux_addr),
+	.aux_din(aux_din),
+	.aux_ack(aux_ack),
+	.aux_dout(aux_dout),
+	.vid_req(1'b0),
+	.vid_addr(21'd0),
+	.vid_dout(),
+	.vid_valid(),
+	.MA(MA),
+	.MD(MD),
+	.MWR_N(MWR_N)
+);
+
+wire [15:0] load_rom_size;
+wire        load_rom_size_wr;
+always @(posedge clk) if (load_rom_size_wr) rom_size <= load_rom_size;
+
+v06c_loader loader (
+	.clk(clk),
+	.cold(cold_reset),
+	.rom_active(rom_active),
+	.rom_addr(rom_addr),
+	.rom_data(rom_data),
+	.rom_wr(rom_wr),
+	.file_active(file_active),
+	.file_slot(file_slot),
+	.file_addr(file_addr),
+	.file_data(file_data),
+	.file_wr(file_wr),
+	.busy(load_busy),
+	.erasing(erasing),
+	.rom_off(load_rom_off),
+	.rom_size(load_rom_size),
+	.rom_size_wr(load_rom_size_wr),
+	.aux_req(aux_req),
+	.aux_we(aux_we),
+	.aux_addr(aux_addr),
+	.aux_din(aux_din),
+	.aux_ack(aux_ack)
+);
+
+// the copy of the screen (page 0, 8000-FFFF): the CPU writes and the aux writes
+reg cpu_we_d = 1'b0;
+always @(posedge clk) cpu_we_d <= cpu_we;
+wire cpu_vwr = cpu_we & ~cpu_we_d & (ram_addr[18:15] == 4'b0001);
+wire aux_vwr = aux_ack & aux_we & (aux_addr[21:15] == 7'b0000001);
+wire        vwr  = aux_vwr | cpu_vwr;
+wire [14:0] vwa  = aux_vwr ? aux_addr[14:0] : addr[14:0];
+wire  [7:0] vwd  = aux_vwr ? aux_din : cpu_o;
+
+wire [12:0] vaddr;
+wire [31:0] vdata;
+
+v06c_vram vram (
+	.clk(clk),
+	.we(vwr),
+	.waddr(vwa),
+	.wdata(vwd),
+	.raddr(vaddr),
+	.rdata(vdata)
+);
+
+// ---------------------------------------------------------------- RAM disk 256 KB
+reg [7:0] ed_reg = 8'd0;
+reg       ed_we_d = 1'b0;
+wire      edsk_we = io_wr & edsk_sel;
+always @(posedge clk) begin
+	ed_we_d <= edsk_we;
+	if (cpu_reset) ed_reg <= 8'd0;
+	else if (~ed_we_d & edsk_we) ed_reg <= cpu_o;
+end
+
+wire ed_win   = addr[15] & ((addr[13] ^ addr[14]) | (ed_reg[7] & addr[13] & addr[14]) | (ed_reg[6] & ~addr[13] & ~addr[14]));
+wire ed_ram   = ed_reg[5] & ed_win & (ram_read | ~write_n);
+wire ed_stack = ed_reg[4] & io_stack & (ram_read | ~write_n);
+
+always @(*) begin
+	casex ({ed_stack, ed_ram, ed_reg[3:0]})
+		6'b1X00XX, 6'b01XX00: ed_page = 3'd1;
+		6'b1X01XX, 6'b01XX01: ed_page = 3'd2;
+		6'b1X10XX, 6'b01XX10: ed_page = 3'd3;
+		6'b1X11XX, 6'b01XX11: ed_page = 3'd4;
+		default: ed_page = 3'd0;
+	endcase
+end
+
+// ---------------------------------------------------------------- video
+wire retrace;
+wire [7:0] ppi1_a, ppi1_b, ppi1_c;
+
+v06c_video video (
+	.clk(clk),
+	.reset(cpu_reset & ~pal_keep),
+	.ce_12mp(ce_12mp),
+	.ce_12mn(ce_12mn),
+	.vaddr(vaddr),
+	.vdata(vdata),
+	.din(cpu_o),
+	.io_we(pal_sel & io_wr),
+	.scroll(ppi1_a),
+	.border(ppi1_b[3:0]),
+	.mode512(ppi1_b[4]),
+	.retrace(retrace),
+	.pal(pal),
+	.rgb(rgb),
+	.hblank(hblank),
+	.vblank(vblank),
+	.hsync(hsync),
+	.vsync(vsync),
+	.de(de),
+	.hc(hc),
+	.vc(vc)
+);
+
+reg old_retrace = 1'b0;
+always @(posedge clk) begin
+	old_retrace <= retrace;
+	if (!cpu_inte) cpu_int <= 1'b0;
+	else if (~old_retrace & retrace) cpu_int <= 1'b1;
+end
+
+// ---------------------------------------------------------------- keyboard, PPI1
+wire [7:0] kbd_o;
+wire [2:0] kbd_shift;
+
+v06c_kbd kbd (
+	.clk(clk),
+	.reset(cold_reset),
+	.scancode(kb_scancode),
+	.scancode_upd(kb_scancode_upd),
+	.addr(~ppi1_a),
+	.odata(kbd_o),
+	.shift(kbd_shift),
+	.reset_key(reset_key)
+);
+
+k580vv55 ppi1 (
+	.clk_sys(clk),
+	.reset(1'b0),
+	.addr(~addr[1:0]),
+	.we_n(~(io_wr & ppi1_sel)),
+	.idata(cpu_o),
+	.odata(ppi1_o),
+	.ipa(8'hFF),
+	.opa(ppi1_a),
+	.ipb(~kbd_o),
+	.opb(ppi1_b),
+	.ipc({~kbd_shift, tape_in, 4'b1111}),
+	.opc(ppi1_c)
+);
+assign tape_out = ppi1_c[0];
+
+// ---------------------------------------------------------------- joysticks (as the MiSTer core)
+wire [7:0] joyPU = joy_a | joy_b;
+assign joyPU_o = {joyPU[3], joyPU[0], joyPU[2], joyPU[1], joyPU[4], joyPU[5], 2'b00};
+assign joyA_o  = ~{joy_a[5], joy_a[4], 2'b00, joy_a[2], joy_a[3], joy_a[1], joy_a[0]};
+assign joyB_o  = ~{joy_b[5], joy_b[4], 2'b00, joy_b[2], joy_b[3], joy_b[1], joy_b[0]};
+
+reg  [7:0] joy_port = 8'd0;
+reg        joy_we_d = 1'b0;
+wire       joy_we = io_wr & joy_sel;
+always @(posedge clk) begin
+	joy_we_d <= joy_we;
+	if (cpu_reset) joy_port <= 8'd0;
+	else if (~joy_we_d & joy_we) begin
+		if (addr[0]) joy_port <= cpu_o;
+		else if (!cpu_o[7]) joy_port[cpu_o[3:1]] <= cpu_o[0];
+	end
+end
+
+reg [7:0] joyP_r;
+always @(*) begin
+	case (joy_port[6:5])
+		2'b00: joyP_r = joyA_o & joyB_o;
+		2'b01: joyP_r = joyA_o;
+		2'b10: joyP_r = joyB_o;
+		default: joyP_r = 8'hFF;
+	endcase
+end
+assign joyP_o = joyP_r;
+
+// ---------------------------------------------------------------- sound
+wire [2:0] pit_out, pit_active;
+wire [2:0] pit_snd = pit_out & pit_active;
+
+k580vi53 pit (
+	.reset(cpu_reset),
+	.clk_sys(clk),
+	.clk_timer({clk_pit, clk_pit, clk_pit}),
+	.addr(~addr[1:0]),
+	.wr(io_wr & pit_sel),
+	.rd(io_rd & pit_sel),
+	.din(cpu_o),
+	.dout(pit_o),
+	.gate(3'b111),
+	.out(pit_out),
+	.sound_active(pit_active)
+);
+
+// karabas: 3 bits (the MiSTer core sums the four into 2 bits, 4 wraps to 0)
+wire [2:0] legacy_audio = {2'b00, ppi1_c[0]} + pit_snd[0] + pit_snd[1] + pit_snd[2];
+
+reg  [7:0] covox = 8'd0;
+reg [26:0] covox_timeout = 27'd0;
+reg        vox_we_d = 1'b0;
+wire       vox_we = io_wr & vox_sel & (covox_timeout == 27'd0);
+always @(posedge clk) begin
+	if (cpu_reset | rom_enable) covox_timeout <= 27'd100000000;   // 2 s
+	else if (covox_timeout != 27'd0) covox_timeout <= covox_timeout - 1'd1;
+	vox_we_d <= vox_we;
+	if (cpu_reset) covox <= 8'd0;
+	else if (~vox_we_d & vox_we) covox <= cpu_o;
+end
+
+// without the AY: {legacy, 8'd0} + {covox, 1'b0}, as AUDIO_L of the MiSTer core (11 bits used)
+wire [10:0] mix = {legacy_audio, 8'd0} + {2'b00, covox, 1'b0};
+assign audio_l = {mix, 5'd0};
+assign audio_r = {mix, 5'd0};
+
+endmodule
