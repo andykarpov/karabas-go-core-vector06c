@@ -42,6 +42,9 @@ module tb_v06c (
 	output wire  [8:0] vc,
 	output wire        ce_pix,
 	output wire [15:0] audio_l,
+	output wire [15:0] audio_r,
+	input  wire        tape_play,
+	output wire        tape_playing,
 	output wire        running,
 	output wire [15:0] cpu_addr,
 	output wire        cpu_int_ack,
@@ -89,9 +92,9 @@ v06c_system sys (
 	.sdc_sector(sdc_sector), .sdc_busy(sdc_busy), .sdc_done(sdc_done), .sdc_error(sdc_error), .sdc_slot(sdc_slot),
 	.sdc_byte_in_strobe(sdc_in_strobe), .sdc_byte_addr(sdc_byte_addr), .sdc_byte_in_data(sdc_in_data),
 	.sdc_byte_out_data(sdc_out), .img_wp(8'd0),
-	.kb_scancode(kb_scancode), .kb_scancode_upd(kb_scancode_upd), .joy_a(joy_a), .joy_b(8'd0), .tape_in(1'b0),
+	.kb_scancode(kb_scancode), .kb_scancode_upd(kb_scancode_upd), .joy_a(joy_a), .joy_b(8'd0), .tape_in(1'b0), .tape_play(tape_play), .tape_stop(1'b0), .tape_playing(tape_playing),
 	.pal(pal), .rgb(rgb), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .de(), .hc(hc), .vc(vc), .ce_pix(ce_pix),
-	.audio_l(audio_l), .audio_r(), .tape_out(),
+	.audio_l(audio_l), .audio_r(audio_r), .tape_out(),
 	.running(running), .cpu_addr(cpu_addr), .cpu_int_ack(cpu_int_ack), .dbg_io_wr(dbg_io_wr), .dbg_io_rd(dbg_io_rd), .dbg_dout(dbg_dout), .dbg_din(dbg_din), .dbg_m1(dbg_m1),
 	.MA(MA), .MD(MD), .MWR_N(MWR_N)
 );

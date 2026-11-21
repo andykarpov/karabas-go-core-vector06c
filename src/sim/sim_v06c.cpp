@@ -224,7 +224,7 @@ int main(int argc, char **argv) {
 	static uint32_t img[312][768];
 	std::vector<uint32_t> cur(768 * 312, 0);
 	int err_d = 0;
-	int frames = 0, acks = 0; long snd_edges = 0;
+	int frames = 0, acks = 0; long snd_edges = 0, snd_edges_r = 0;
 	uint64_t last_ack = 0, ack_period = 0, ack_min = UINT64_MAX, ack_max = 0;
 	bool prev_ack = false, prev_vs = false, have_frame = false;
 	uint64_t t0 = clks, end = t0 + (uint64_t)ms * MS, next_trace = t0 + MS;
@@ -287,7 +287,7 @@ int main(int argc, char **argv) {
 			if (pc_from >= 0 && t >= pc_from && t < pc_to && top->dbg_m1 && !pm) printf("%9.4f ms M1 %04X\n", t, top->cpu_addr);
 			pm = top->dbg_m1;
 		}
-		{ static uint16_t pa; if (top->audio_l != pa) { snd_edges++; pa = top->audio_l; } }
+		{ static uint16_t pa, pr; if (top->audio_l != pa) { snd_edges++; pa = top->audio_l; } if (top->audio_r != pr) { snd_edges_r++; pr = top->audio_r; } }
 		bool vs = top->vsync;
 		if (vs && !prev_vs) {
 			frames++;
@@ -330,7 +330,7 @@ int main(int argc, char **argv) {
 	for (auto &e : dexp) { int v = e.first < disks[4].size() ? disks[4][e.first] : -1; if (v != e.second) { printf("expect disk %06X = %02X, got %02X\n", e.first, e.second, v); err_d = 1; } }
 	for (uint32_t a : peeks) printf("peek %06X = %02X\n", a, peek(a));
 	if (has_disk) printf("disk: %d sectors read, %d written\n", disk_reads, disk_writes);
-	printf("sound changes %ld\n", snd_edges);
+	printf("sound changes %ld, right %ld\n", snd_edges, snd_edges_r);
 	printf("576p: frames %d, active lines of the last frame %d\n", o_frames, oy);
 	if (frame2x && o_have) {
 		FILE *f = fopen(frame2x, "wb");

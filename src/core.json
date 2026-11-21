@@ -1,7 +1,7 @@
 {
     "id": "vector06c",
     "name": "Vector-06C",
-    "build": "26112104",
+    "build": "26112105",
     "visible": true,
     "type": "osd",
     "order": 40,
@@ -13,9 +13,19 @@
         }
     ],
     "boards": {
+        "go": {
+            "link": 2,
+            "build": "26112105",
+            "bitstream": "karabas_go.bin"
+        },
+        "mini": {
+            "link": 2,
+            "build": "26112105",
+            "bitstream": "karabas_mini.bin"
+        },
         "minig": {
             "link": 2,
-            "build": "26112104",
+            "build": "26112105",
             "bitstream": "karabas_minig.bin"
         }
     },
@@ -73,6 +83,15 @@
             "page": 2
         },
         {
+            "type": "FL",
+            "name": "Tape .wav",
+            "slot": 6,
+            "extensions": ".wav",
+            "dir": "/vector06c",
+            "hotkey": "Menu+F4",
+            "page": 2
+        },
+        {
             "type": "S",
             "name": "CPU speed",
             "options": [
@@ -104,6 +123,16 @@
         {
             "type": "T",
             "name": "Cold reset"
+        },
+        {
+            "type": "T",
+            "name": "Tape play",
+            "page": 2
+        },
+        {
+            "type": "T",
+            "name": "Tape stop",
+            "page": 2
         },
         {
             "type": "-"
