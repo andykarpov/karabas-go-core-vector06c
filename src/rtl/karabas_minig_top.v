@@ -16,9 +16,9 @@
 
  Soft switches (the index of the item in the osd of core.json, file items included):
    0 Disk A (F 4)   1 Disk B (F 5)   2 ROM file (FL 1)   3 RAM disk .edd (FL 2)   4 C00 file (FL 3)
-   5 Boot ROM (FL 7)   6 CPU speed (3 / 6 MHz)   7 Palette on reset (Reset / Keep)
-   8 Reset (to the boot ROM)   9 Start (reset, boot ROM off: the program in memory runs, BLK+VVOD)
-   10 Cold reset (memory cleared)
+   5 Boot ROM (FL 7)   6 Tape .wav (FL 6)   7 CPU speed (3 / 6 MHz)   8 Palette on reset (Reset / Keep)
+   9 Reset (to the boot ROM)   10 Start (reset, boot ROM off: the program in memory runs, BLK+VVOD)
+   11 Cold reset (memory cleared)   12 Tape play (from the start)   13 Tape stop
 */
 
 module karabas_minig_top (
@@ -201,7 +201,7 @@ assign MCU_IO[1] = mcu_int;
 assign MCU_IO[0] = 1'bz;
 assign MCU_IO[5:2] = 4'bzzzz;
 
-localparam SW_N = 11;
+localparam SW_N = 14;
 wire [15:0] joy_l16, joy_r16;
 wire [1:0] ld_kind;
 wire [7:0] ld_slot, ld_data;
@@ -309,18 +309,22 @@ assign SD_CLK = mcu_sck_ibufg;
 
 // ------------------------------------------------------------------ soft switches
 
-wire sw_turbo = sw[6*8];
-wire sw_pal_keep = sw[7*8];
-wire sw_reset = sw[8*8];
-wire sw_start = sw[9*8];
-wire sw_cold = sw[10*8];
+wire sw_turbo = sw[7*8];
+wire sw_pal_keep = sw[8*8];
+wire sw_reset = sw[9*8];
+wire sw_start = sw[10*8];
+wire sw_cold = sw[11*8];
+wire sw_tplay = sw[12*8];
+wire sw_tstop = sw[13*8];
 
 // the triggers as pulses
-reg [2:0] trg_d = 3'd0;
-always @(posedge clk_sys) trg_d <= { sw_cold, sw_start, sw_reset };
+reg [4:0] trg_d = 5'd0;
+always @(posedge clk_sys) trg_d <= { sw_tstop, sw_tplay, sw_cold, sw_start, sw_reset };
 wire rst_boot = sw_reset & ~trg_d[0];
 wire rst_app = sw_start & ~trg_d[1];
 wire rst_cold = sw_cold & ~trg_d[2];
+wire tape_play = sw_tplay & ~trg_d[3];
+wire tape_stop = sw_tstop & ~trg_d[4];
 
 // the joysticks of the mcu (1 up, 2 down, 3 left, 4 right, 6 A, 7 B) in the order of the MiSTer
 // core (0 right, 1 left, 2 down, 3 up, 4 fire 1, 5 fire 2)
@@ -362,6 +366,9 @@ v06c_system sys (
 	.joy_a(joy_a),
 	.joy_b(joy_b),
 	.tape_in(TAPE_IN),
+	.tape_play(tape_play),
+	.tape_stop(tape_stop),
+	.tape_playing(),
 	.pal(pal),
 	.rgb(),
 	.hblank(),

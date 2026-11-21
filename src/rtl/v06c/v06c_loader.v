@@ -14,6 +14,7 @@
      2  .edd, the RAM disk image, at 10000 (256 KB): the boot ROM stays on
      3  .c00 at 0000 (64 KB): the boot ROM off
      7  another boot ROM at 50000 (up to 32 KB): rom_size
+     6  a .wav for the tape (v06c_tape) at 200000 (up to 2 MB): the machine keeps running (not busy)
  - cold (a rising edge): the main RAM and the RAM disk cleared (00000-4FFFF).
  busy while a load runs, a write waits or an erase runs: the machine is in reset meanwhile.
  The mcu writes a byte in ten clocks or less often; a write here takes four to six.
@@ -62,7 +63,9 @@ reg        er_wrap = 1'b0;    // the erase after a .rom: 16-bit addresses
 reg        er_pend = 1'b0;    // start it when the last write is out
 reg [15:0] sz = 16'd0;
 
-assign busy = file_active | rom_active | pend | aux_req | erasing | er_pend;
+reg pend_tape = 1'b0;          // the write waiting is of a .wav (slot 6): not busy
+wire tape_load = file_active && file_slot == 8'd6;
+assign busy = (file_active & ~tape_load) | rom_active | ((pend | aux_req) & ~pend_tape) | erasing | er_pend;
 
 // a file write into its SRAM address; 1 = out of range (dropped)
 reg [21:0] f_addr;
@@ -74,6 +77,7 @@ always @(*) begin
 		8'd2: begin f_addr = 22'h010000 + file_addr[17:0]; f_drop = (file_addr >= 32'h00040000); end
 		8'd3: begin f_addr = {6'd0, file_addr[15:0]};      f_drop = (file_addr >= 32'h00010000); end
 		8'd7: begin f_addr = 22'h050000 + file_addr[14:0]; f_drop = (file_addr >= 32'h00008000); end
+		8'd6: begin f_addr = 22'h200000 + file_addr[20:0]; f_drop = (file_addr >= 32'h00200000); end
 		default: begin f_addr = 22'd0; f_drop = 1'b1; end
 	endcase
 end
@@ -90,14 +94,14 @@ always @(posedge clk) begin
 	end
 
 	if (rom_wr) begin
-		pend <= 1'b1; pend_addr <= rom_addr; pend_data <= rom_data;
+		pend <= 1'b1; pend_addr <= rom_addr; pend_data <= rom_data; pend_tape <= 1'b0;
 		if (rom_addr[21:15] == 7'b0001010 && {1'b0, rom_addr[14:0]} >= sz) begin
 			sz <= {1'b0, rom_addr[14:0]} + 1'd1;
 			rom_size <= {1'b0, rom_addr[14:0]} + 1'd1;
 			rom_size_wr <= 1'b1;
 		end
 	end else if (file_wr && !f_drop) begin
-		pend <= 1'b1; pend_addr <= f_addr; pend_data <= file_data;
+		pend <= 1'b1; pend_addr <= f_addr; pend_data <= file_data; pend_tape <= (file_slot == 8'd6);
 		if (file_slot == 8'd1) last <= {1'b0, f_addr[15:0]} + 1'd1;
 		if (file_slot == 8'd7 && {1'b0, file_addr[14:0]} >= sz) begin
 			sz <= {1'b0, file_addr[14:0]} + 1'd1;

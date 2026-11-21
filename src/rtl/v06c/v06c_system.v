@@ -24,7 +24,10 @@
    .fdd: 80 x 2 x 5 x 1024) cached in the SRAM by v06c_fdd_cache (060000, 12D000) from the mounter of
    kg_mcu2 (its sector interface sdc_*). A mount of disk A while the boot ROM is on resets into the
    boot ROM (as fdd_busy of the MiSTer core).
- - not yet (docs/PLAN.md): the Z80 (Ф4), the AY (Ф3), the tape (Ф4).
+ - the AY (jt49 of core-specialist) on ports 14 (data) / 15 (register), 1.75 MHz; the sound in
+   stereo ABC (L = 2A + B, R = 2C + B) with the 8253, the beeper and the covox, signed.
+ - the tape: a .wav through FL slot 6 played by v06c_tape into PC4 (else the TAPE_IN pin).
+ - backlog (docs/BACKLOG.md): the Z80, .cas files, the physical floppy of the Go.
 */
 
 module v06c_system (
@@ -68,6 +71,9 @@ module v06c_system (
 	input  wire  [7:0] joy_a,          // MiSTer order: right, left, down, up, fire 1, fire 2 in bits 0..5
 	input  wire  [7:0] joy_b,
 	input  wire        tape_in,
+	input  wire        tape_play,      // a pulse: the .wav from its start
+	input  wire        tape_stop,
+	output wire        tape_playing,
 
 	// the video in the raster of the machine (v06c_video)
 	output wire  [7:0] pal,
@@ -255,8 +261,6 @@ always @(*) begin
 	endcase
 end
 
-// karabas: not yet (Ф3 AY)
-assign psg_o = 8'hFF;
 
 // ---------------------------------------------------------------- memory
 wire [7:0] ram_o;
@@ -279,7 +283,10 @@ wire        cpu_we = ~cpu_wr_n & ~io_write & ~cpu_reset;
 wire        aux_req, aux_we, aux_ack;
 wire [21:0] aux_addr;
 wire  [7:0] aux_din, aux_dout;
-reg   [1:0] own = 2'd0;
+reg   [2:0] own = 3'd0;             // the aux port: 1 loader, 2 / 3 disk caches, 4 the tape
+wire        tp_req;
+wire [21:0] tp_addr;
+wire        tp_bit;
 wire        ld_req, ld_we;
 wire [21:0] ld_addr;
 wire  [7:0] ld_din;
@@ -333,14 +340,14 @@ v06c_loader loader (
 	.aux_we(ld_we),
 	.aux_addr(ld_addr),
 	.aux_din(ld_din),
-	.aux_ack(aux_ack && own == 2'd1)
+	.aux_ack(aux_ack && own == 3'd1)
 );
 
 // the copy of the screen (page 0, 8000-FFFF): the CPU writes and the writes of the loader
 reg cpu_we_d = 1'b0;
 always @(posedge clk) cpu_we_d <= cpu_we;
 wire cpu_vwr = cpu_we & ~cpu_we_d & (ram_addr[18:15] == 4'b0001);
-wire aux_vwr = aux_ack & (own == 2'd1) & (aux_addr[21:15] == 7'b0000001);
+wire aux_vwr = aux_ack & (own == 3'd1) & (aux_addr[21:15] == 7'b0000001);
 wire        vwr  = aux_vwr | cpu_vwr;
 wire [14:0] vwa  = aux_vwr ? aux_addr[14:0] : addr[14:0];
 wire  [7:0] vwd  = aux_vwr ? aux_din : cpu_o;
@@ -439,7 +446,7 @@ v06c_fdd_cache #(.BASE(22'h060000), .MAXSEC(1640), .SLOT(3'd4)) cache_a (
 	.sdc_byte_addr(sdc_byte_addr), .sdc_byte_in_data(sdc_byte_in_data), .sdc_byte_out_data(sdc_out_a),
 	.pause(loading),
 	.aux_req(fd_req_a), .aux_we(fd_we_a), .aux_addr(fd_addr_a), .aux_din(fd_din_a),
-	.aux_ack(aux_ack && own == 2'd2), .aux_dout(aux_dout),
+	.aux_ack(aux_ack && own == 3'd2), .aux_dout(aux_dout),
 	.filling(), .filled()
 );
 
@@ -453,7 +460,7 @@ v06c_fdd_cache #(.BASE(22'h12D000), .MAXSEC(1640), .SLOT(3'd5)) cache_b (
 	.sdc_byte_addr(sdc_byte_addr), .sdc_byte_in_data(sdc_byte_in_data), .sdc_byte_out_data(sdc_out_b),
 	.pause(loading),
 	.aux_req(fd_req_b), .aux_we(fd_we_b), .aux_addr(fd_addr_b), .aux_din(fd_din_b),
-	.aux_ack(aux_ack && own == 2'd3), .aux_dout(aux_dout),
+	.aux_ack(aux_ack && own == 3'd3), .aux_dout(aux_dout),
 	.filling(), .filled()
 );
 
@@ -464,13 +471,31 @@ assign sdc_byte_out_data = (sdc_slot == 3'd5) ? sdc_out_b : sdc_out_a;
 
 // a master holds its request until the ack and drops it at that edge
 always @(posedge clk) begin
-	if (aux_ack) own <= 2'd0;
-	else if (own == 2'd0) own <= ld_req ? 2'd1 : fd_req_a ? 2'd2 : fd_req_b ? 2'd3 : 2'd0;
+	if (aux_ack) own <= 3'd0;
+	else if (own == 3'd0) own <= ld_req ? 3'd1 : fd_req_a ? 3'd2 : fd_req_b ? 3'd3 : tp_req ? 3'd4 : 3'd0;
 end
-assign aux_req  = own == 2'd1 ? ld_req  : own == 2'd2 ? fd_req_a  : own == 2'd3 ? fd_req_b : 1'b0;
-assign aux_we   = own == 2'd1 ? ld_we   : own == 2'd2 ? fd_we_a   : fd_we_b;
-assign aux_addr = own == 2'd1 ? ld_addr : own == 2'd2 ? fd_addr_a : fd_addr_b;
-assign aux_din  = own == 2'd1 ? ld_din  : own == 2'd2 ? fd_din_a  : fd_din_b;
+assign aux_req  = own == 3'd1 ? ld_req  : own == 3'd2 ? fd_req_a  : own == 3'd3 ? fd_req_b  : own == 3'd4 ? tp_req : 1'b0;
+assign aux_we   = own == 3'd1 ? ld_we   : own == 3'd2 ? fd_we_a   : own == 3'd3 ? fd_we_b   : 1'b0;
+assign aux_addr = own == 3'd1 ? ld_addr : own == 3'd2 ? fd_addr_a : own == 3'd3 ? fd_addr_b : tp_addr;
+assign aux_din  = own == 3'd1 ? ld_din  : own == 3'd2 ? fd_din_a  : fd_din_b;
+
+// ---------------------------------------------------------------- the tape (.wav of FL slot 6)
+v06c_tape tape (
+	.clk(clk),
+	.play(tape_play),
+	.stop(tape_stop),
+	.file_active(file_active && file_slot == 8'd6),
+	.file_addr(file_addr),
+	.file_data(file_data),
+	.file_wr(file_wr && file_slot == 8'd6),
+	.aux_req(tp_req),
+	.aux_addr(tp_addr),
+	.aux_ack(aux_ack && own == 3'd4),
+	.aux_dout(aux_dout),
+	.bit_out(tp_bit),
+	.playing(tape_playing)
+);
+wire tape_bit = tape_playing ? tp_bit : tape_in;
 
 // ---------------------------------------------------------------- RAM disk 256 KB
 reg [7:0] ed_reg = 8'd0;
@@ -557,7 +582,7 @@ k580vv55 ppi1 (
 	.opa(ppi1_a),
 	.ipb(~kbd_o),
 	.opb(ppi1_b),
-	.ipc({~kbd_shift, tape_in, 4'b1111}),
+	.ipc({~kbd_shift, tape_bit, 4'b1111}),
 	.opc(ppi1_c)
 );
 assign tape_out = ppi1_c[0];
@@ -624,13 +649,54 @@ always @(posedge clk) begin
 	else if (~vox_we_d & vox_we) covox <= cpu_o;
 end
 
-// The mix of the MiSTer core (without the AY): {legacy, 8'd0} + {covox, 1'b0}, 0..1534, unsigned there
-// (AUDIO_S 0). karabas: the DAC and HDMI take two's complement: the mix centred on 0 (- 767) and x 16,
-// +-12272 (-8.5 dBFS, room for the AY of Ф3). Taken unsigned, the three 8253 channels and the beeper
-// all high gave 8000, the most negative value: the sound broke up on the DAC (user 2026-11-21).
-wire [10:0] mix = {legacy_audio, 8'd0} + {2'b00, covox, 1'b0};
-wire signed [15:0] mix_s = ($signed({5'd0, mix}) - 16'sd767) <<< 4;
-assign audio_l = mix_s;
-assign audio_r = mix_s;
+// ---------------------------------------------------------------- AY (ports 14 data, 15 register)
+reg       ay_ce = 1'b0;
+reg [6:0] ay_acc = 7'd0;
+reg [3:0] ay_reg = 4'd0;
+reg       psg_we_d = 1'b0;
+wire      psg_we = io_wr & psg_sel;
+wire      psg_wp = psg_we & ~psg_we_d;
+wire [7:0] ay_a, ay_b, ay_c;
+always @(posedge clk) begin
+	psg_we_d <= psg_we;
+	ay_ce <= ay_acc >= 7'd89;                               // 48 MHz * 7 / 96 = 3.5 MHz (jt49 sel 0: / 2)
+	ay_acc <= (ay_acc >= 7'd89) ? ay_acc + 7'd7 - 7'd96 : ay_acc + 7'd7;
+	if (cpu_reset) ay_reg <= 4'd0;
+	else if (psg_wp && addr[0]) ay_reg <= cpu_o[3:0];
+end
+
+jt49 ay (
+	.rst_n(~cpu_reset),
+	.clk(clk),
+	.clk_en(ay_ce),
+	.addr(ay_reg),
+	.cs_n(1'b0),
+	.wr_n(~(psg_wp && !addr[0])),
+	.din(cpu_o),
+	.sel(1'b0),
+	.dout(psg_o),
+	.sound(),
+	.A(ay_a),
+	.B(ay_b),
+	.C(ay_c),
+	.sample(),
+	.IOA_in(8'hFF),
+	.IOA_out(),
+	.IOB_in(8'hFF),
+	.IOB_out()
+);
+
+// The mix: {legacy, 8'd0} + {covox, 1'b0} as the MiSTer core (0..1534) and the AY in ABC stereo
+// (2A + B, 2C + B: 0..765), 0..2299, unsigned. karabas: the DAC and HDMI take two's complement: centred
+// on 0 (- 1150) and x 16, +-18400. Taken unsigned (as AUDIO_S 0 of the MiSTer core), the three 8253
+// channels and the beeper all high gave 8000, the most negative value: the sound broke up on the DAC
+// (user 2026-11-21).
+wire [11:0] mix_base = {1'b0, legacy_audio, 8'd0} + {3'b000, covox, 1'b0};
+wire [11:0] mix_l = mix_base + {3'b000, ay_a, 1'b0} + {4'b0000, ay_b};
+wire [11:0] mix_r = mix_base + {3'b000, ay_c, 1'b0} + {4'b0000, ay_b};
+wire signed [15:0] mix_ls = ($signed({4'd0, mix_l}) - 16'sd1150) <<< 4;
+wire signed [15:0] mix_rs = ($signed({4'd0, mix_r}) - 16'sd1150) <<< 4;
+assign audio_l = mix_ls;
+assign audio_r = mix_rs;
 
 endmodule
