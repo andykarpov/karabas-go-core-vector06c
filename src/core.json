@@ -1,0 +1,35 @@
+{
+    "id": "vector06c",
+    "name": "Vector-06C",
+    "build": "26112101",
+    "visible": true,
+    "type": "osd",
+    "order": 40,
+    "eeprom_bank": 255,
+    "roms": [
+        {
+            "filename": "roms/boot.rom",
+            "address": 327680
+        }
+    ],
+    "boards": {
+        "minig": {
+            "link": 2,
+            "build": "26112101",
+            "bitstream": "karabas_minig.bin"
+        }
+    },
+    "osd": [
+        {"type": "FL", "name": "ROM file", "slot": 1, "extensions": ".rom,.com,.r0m", "dir": "/vector06c", "hotkey": "Menu+F2", "page": 1},
+        {"type": "FL", "name": "RAM disk", "slot": 2, "extensions": ".edd", "dir": "/vector06c", "hotkey": "Menu+F3", "page": 1},
+        {"type": "FL", "name": "C00 file", "slot": 3, "extensions": ".c00", "dir": "/vector06c", "page": 1},
+        {"type": "FL", "name": "Boot ROM", "slot": 7, "extensions": ".rom,.bin", "dir": "/vector06c", "page": 1},
+        {"type": "S", "name": "CPU speed", "options": ["3 MHz", "6 MHz"], "default": 0, "hotkey": "Menu+S"},
+        {"type": "S", "name": "Palette", "options": ["Reset", "Keep"], "default": 0},
+        {"type": "T", "name": "Reset", "hotkey": "F12"},
+        {"type": "T", "name": "Start", "hotkey": "Menu+F11"},
+        {"type": "T", "name": "Cold reset"},
+        {"type": "-"},
+        {"type": "M", "name": "Files", "open": 1}
+    ]
+}

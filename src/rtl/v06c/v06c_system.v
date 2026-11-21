@@ -67,6 +67,10 @@ module v06c_system (
 	output wire        running,        // the CPU is out of reset (sim)
 	output wire [15:0] cpu_addr,       // sim
 	output wire        cpu_int_ack,    // sim: an interrupt acknowledge cycle
+	output wire        dbg_io_wr,      // sim: an OUT / IN cycle (level), cpu_addr[7:0] the port
+	output wire        dbg_io_rd,
+	output wire  [7:0] dbg_dout,
+	output wire  [7:0] dbg_din,
 
 	output wire [20:0] MA,
 	inout  wire [15:0] MD,
@@ -195,6 +199,10 @@ assign cpu_int_ack = int_ack & cpu_sync;
 
 wire io_rd = io_read & cpu_rd;
 wire io_wr = io_write & ~cpu_wr_n;
+assign dbg_io_wr = io_wr;
+assign dbg_io_rd = io_rd;
+assign dbg_dout = cpu_o;
+assign dbg_din = cpu_i;
 
 // ---------------------------------------------------------------- I/O decode
 reg ppi1_sel, joy_sel, vox_sel, pit_sel, pal_sel, psg_sel, edsk_sel, fdd_sel;

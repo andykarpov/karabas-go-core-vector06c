@@ -14,7 +14,7 @@ S=$(cd "$H/.." && pwd)
 B=$H/build
 mkdir -p "$B"
 R=$S/rtl
-SRC="$H/tb_v06c.v $R/v06c/v06c_system.v $R/v06c/v06c_sram.v $R/v06c/v06c_loader.v $R/v06c/v06c_vram.v $R/v06c/v06c_video.v $R/v06c/v06c_kbd.v $R/v06c/k580vv55.v $R/v06c/k580vi53.v $R/vm80a/vm80a.v"
+SRC="$H/tb_v06c.v $R/v06c/v06c_system.v $R/v06c/v06c_sram.v $R/v06c/v06c_loader.v $R/v06c/v06c_vram.v $R/v06c/v06c_video.v $R/v06c/v06c_scan2x.v $R/v06c/v06c_kbd.v $R/v06c/k580vv55.v $R/v06c/k580vi53.v $R/vm80a/vm80a.v"
 verilator --language 1364-2005 --cc --exe --build -j 8 -O3 --top-module tb_v06c -Mdir "$B/obj" -o sim_v06c \
 	-Wno-fatal -Wno-lint -Wno-style -Wno-MULTIDRIVEN -Wno-UNOPTFLAT -Wno-PINMISSING -Wno-PINNOTFOUND \
 	--x-initial fast -CFLAGS -O2 $SRC "$H/sim_v06c.cpp" > "$B/build.log" 2>&1 || { grep -E "Error|error" "$B/build.log" | head -30; exit 1; }

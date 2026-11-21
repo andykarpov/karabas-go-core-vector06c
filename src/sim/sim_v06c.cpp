@@ -6,8 +6,10 @@
 //   --ms N                run N ms after the ROM load (default 1000)
 //   --turbo               6 MHz
 //   --frame FILE.ppm      the last full frame of the raster (768 x 312, 12 MHz pixels)
+//   --frame2x FILE.ppm    the last full frame of the 576p output (640 x 576 active, v06c_scan2x)
 //   --expect ADDR:VAL     an SRAM byte at the end (exit 1 if not)
 //   --peek ADDR           print an SRAM byte at the end
+//   --io N                print the first N IN / OUT cycles
 //   --trace               print the CPU address every 1 ms
 // Prints the frames, the interrupt acknowledges and the clocks of 48 MHz between the last two of them.
 #include <cstdio>
@@ -54,8 +56,11 @@ int main(int argc, char **argv) {
 	std::vector<uint32_t> peeks;
 	std::vector<Ev> evs;
 	int ms = 1000;
-	const char *frame = nullptr;
-	bool turbo = false, trace = false;
+	const char *frame = nullptr, *frame2x = nullptr;
+	static uint32_t o_img[576][640];
+	std::vector<uint32_t> o_cur(640 * 576, 0);
+	int ox = 0, oy = 0, o_lines = 0, o_frames = 0; bool o_prev_de = false, o_prev_vs = true, o_have = false;
+	bool turbo = false, trace = false; int io_n = 0;
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--rom") || !strcmp(argv[i], "--expect")) {
 			bool rom = argv[i][2] == 'r';
@@ -85,8 +90,10 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--peek")) peeks.push_back(strtoul(argv[++i], nullptr, 0));
 		else if (!strcmp(argv[i], "--turbo")) turbo = true;
 		else if (!strcmp(argv[i], "--trace")) trace = true;
+		else if (!strcmp(argv[i], "--io")) io_n = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--ms")) ms = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--frame")) frame = argv[++i];
+		else if (!strcmp(argv[i], "--frame2x")) frame2x = argv[++i];
 		else { fprintf(stderr, "bad option %s\n", argv[i]); return 2; }
 	}
 	top->turbo = turbo;
@@ -107,7 +114,7 @@ int main(int argc, char **argv) {
 
 	static uint32_t img[312][768];
 	std::vector<uint32_t> cur(768 * 312, 0);
-	int frames = 0, acks = 0;
+	int frames = 0, acks = 0; long snd_edges = 0;
 	uint64_t last_ack = 0, ack_period = 0, ack_min = UINT64_MAX, ack_max = 0;
 	bool prev_ack = false, prev_vs = false, have_frame = false;
 	uint64_t t0 = clks, end = t0 + (uint64_t)ms * MS, next_trace = t0 + MS;
@@ -146,6 +153,23 @@ int main(int argc, char **argv) {
 			if (top->hsync || top->vsync) v = 0x202020;
 			cur[top->vc * 768 + top->hc] = v;
 		}
+		if (top->o_ce) {
+			if (top->o_de) { if (ox < 640 && oy < 576) o_cur[oy * 640 + ox] = top->o_rgb; ox++; }
+			else if (o_prev_de) { ox = 0; oy++; o_lines++; }
+			o_prev_de = top->o_de;
+			if (!top->o_vs && o_prev_vs) {
+				if (o_frames++ > 0 && oy == 576) { memcpy(o_img, o_cur.data(), sizeof(o_img)); o_have = true; }
+				oy = 0;
+			}
+			o_prev_vs = top->o_vs;
+		}
+		{
+			static bool pw, pr;
+			if (io_n > 0 && top->dbg_io_wr && !pw) { printf("%8.3f ms OUT %02X,%02X\n", (clks - t0) / (double)MS, top->cpu_addr & 0xFF, top->dbg_dout); io_n--; }
+			if (io_n > 0 && top->dbg_io_rd && !pr) { printf("%8.3f ms IN  %02X\n", (clks - t0) / (double)MS, top->cpu_addr & 0xFF); io_n--; }
+			pw = top->dbg_io_wr; pr = top->dbg_io_rd;
+		}
+		{ static uint16_t pa; if (top->audio_l != pa) { snd_edges++; pa = top->audio_l; } }
 		bool vs = top->vsync;
 		if (vs && !prev_vs) {
 			frames++;
@@ -186,6 +210,15 @@ int main(int argc, char **argv) {
 		printf("screen bytes not 0: 8000 %d, A000 %d, C000 %d, E000 %d\n", nz[0], nz[1], nz[2], nz[3]);
 	}
 	for (uint32_t a : peeks) printf("peek %06X = %02X\n", a, peek(a));
+	printf("sound changes %ld\n", snd_edges);
+	printf("576p: frames %d, active lines of the last frame %d\n", o_frames, oy);
+	if (frame2x && o_have) {
+		FILE *f = fopen(frame2x, "wb");
+		fprintf(f, "P6\n640 576\n255\n");
+		for (int y = 0; y < 576; y++)
+			for (int x = 0; x < 640; x++) { uint32_t v = o_img[y][x]; fputc(v >> 16, f); fputc(v >> 8, f); fputc(v, f); }
+		fclose(f);
+	}
 	int err = 0;
 	for (auto &e : expects) {
 		int v = peek(e.first);

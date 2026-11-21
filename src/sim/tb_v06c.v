@@ -33,6 +33,15 @@ module tb_v06c (
 	output wire        running,
 	output wire [15:0] cpu_addr,
 	output wire        cpu_int_ack,
+	output wire        dbg_io_wr,
+	output wire        dbg_io_rd,
+	output wire  [7:0] dbg_dout,
+	output wire  [7:0] dbg_din,
+	output wire [23:0] o_rgb,
+	output wire        o_hs,
+	output wire        o_vs,
+	output wire        o_de,
+	output wire        o_ce,
 	input  wire [21:0] dbg_addr,
 	output wire  [7:0] dbg_q
 );
@@ -46,11 +55,15 @@ v06c_system sys (
 	.rom_active(rom_active), .rom_addr(rom_addr), .rom_data(rom_data), .rom_wr(rom_wr),
 	.file_active(file_active), .file_slot(file_slot), .file_addr(file_addr), .file_data(file_data), .file_wr(file_wr),
 	.kb_scancode(kb_scancode), .kb_scancode_upd(kb_scancode_upd), .joy_a(joy_a), .joy_b(8'd0), .tape_in(1'b0),
-	.pal(), .rgb(rgb), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .de(), .hc(hc), .vc(vc), .ce_pix(ce_pix),
+	.pal(pal), .rgb(rgb), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .de(), .hc(hc), .vc(vc), .ce_pix(ce_pix),
 	.audio_l(audio_l), .audio_r(), .tape_out(),
-	.running(running), .cpu_addr(cpu_addr), .cpu_int_ack(cpu_int_ack),
+	.running(running), .cpu_addr(cpu_addr), .cpu_int_ack(cpu_int_ack), .dbg_io_wr(dbg_io_wr), .dbg_io_rd(dbg_io_rd), .dbg_dout(dbg_dout), .dbg_din(dbg_din),
 	.MA(MA), .MD(MD), .MWR_N(MWR_N)
 );
+
+wire [7:0] pal;
+v06c_scan2x s2x (.clk(clk), .ce_pix(ce_pix), .hc(hc), .vc(vc), .pal(pal),
+	.rgb(o_rgb), .hs(o_hs), .vs(o_vs), .de(o_de), .oce(o_ce));
 
 reg [7:0] lo [0:2097151];
 reg [7:0] hi [0:2097151];
