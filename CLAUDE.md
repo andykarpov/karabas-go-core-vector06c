@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A core of the Soviet home computer Vector-06C (KR580VM80A 3 MHz, 64 KB RAM + 256 KB RAM disk, 256 x 256 x 16 colours, KR580VI53, 50 Hz frame interrupt, KR1818VG93 floppy) for the Karabas Go, Mini and Mini G boards: Xilinx Spartan-6 XC6SLX25, ISE 14.7 (XST).
 
-Status: Ф0 done on branch f0-import (machine + sim, 2026-11-21), Ф1 (Mini G) next. Sim: `src/sim/run.sh`; machine alone: `cd src && make v06c-xst`. Docs, in Russian: `docs/PLAN.md` (research, decisions, architecture, phases), `docs/HARDWARE.md` (ports, memory, video; from Ф0), `docs/BACKLOG.md`. Follow the phases; record a changed decision in PLAN.md.
+Status: Ф0-Ф2 merged into local master (2026-11-21): machine, Mini G (576p of the native frame, OSD, FL .rom / .edd / .c00, floppy A / B), Mini G hw ok (build 26112104); Ф3 (AY, joysticks) next. Sim: `src/sim/run.sh`; machine alone: `cd src && make v06c-xst`. Docs, in Russian: `docs/PLAN.md` (research, decisions, architecture, phases), `docs/HARDWARE.md` (ports, memory, video; from Ф0), `docs/BACKLOG.md`. Follow the phases; record a changed decision in PLAN.md.
 
 All file work goes through the firmware (OSD, `FL` / `F` items, burst): no loader or soft CPU in the core. Base: the MiSTer core of Sorgelig (`upstream/vector06_mister`, BSD-2 / GPL-3 / CC-BY per file), brought to our rules; video timing and behaviour checked against svofski's vector06cc (`upstream/vector06cc`, branch tangnano9k-hdmi). Get both with `tools/fetch_upstream.sh` (git-ignored). Keep the upstream headers; mark changed lines `// karabas:`. The core is GPL v3 (`LICENSE`).
 
