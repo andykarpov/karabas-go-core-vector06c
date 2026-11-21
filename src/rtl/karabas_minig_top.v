@@ -5,7 +5,8 @@
  Vector-06C core for Karabas Mini rev.G (HDMI, PCM5102). The board glue of core-specialist.
 
  The machine is v06c_system; all file work goes through the firmware: the boot ROM of core.json by
- the ROM loader, .rom / .edd / .c00 files and another boot ROM by the FL items.
+ the ROM loader, .rom / .edd / .c00 files and another boot ROM by the FL items, the floppy images
+ (.fdd) by the F items Disk A / B (slots 4 / 5, the mounter of kg_mcu2).
 
  Clocks: a DCM makes 48 MHz of the 50 MHz crystal (24 / 25), a PLL on it (VCO 960 MHz): clk_sys
  48 MHz (/20: the machine), clk_pix 24 MHz (/40: the 576p of v06c_scan2x, 624 lines, 50.08 Hz),
@@ -14,9 +15,10 @@
  changing every second clock) are taken on clk_pix directly.
 
  Soft switches (the index of the item in the osd of core.json, file items included):
-   0 ROM file (FL 1)   1 RAM disk .edd (FL 2)   2 C00 file (FL 3)   3 Boot ROM (FL 7)
-   4 CPU speed (3 / 6 MHz)   5 Palette on reset (Reset / Keep)   6 Reset (to the boot ROM)
-   7 Start (reset, boot ROM off: the program in memory runs)   8 Cold reset (memory cleared)
+   0 Disk A (F 4)   1 Disk B (F 5)   2 ROM file (FL 1)   3 RAM disk .edd (FL 2)   4 C00 file (FL 3)
+   5 Boot ROM (FL 7)   6 CPU speed (3 / 6 MHz)   7 Palette on reset (Reset / Keep)
+   8 Reset (to the boot ROM)   9 Start (reset, boot ROM off: the program in memory runs, BLK+VVOD)
+   10 Cold reset (memory cleared)
 */
 
 module karabas_minig_top (
@@ -199,7 +201,7 @@ assign MCU_IO[1] = mcu_int;
 assign MCU_IO[0] = 1'bz;
 assign MCU_IO[5:2] = 4'bzzzz;
 
-localparam SW_N = 9;
+localparam SW_N = 11;
 wire [15:0] joy_l16, joy_r16;
 wire [1:0] ld_kind;
 wire [7:0] ld_slot, ld_data;
@@ -212,6 +214,14 @@ wire ft_cs_n, ft_mosi, ft_spi_on, sd2_cs_n, sd2_mosi;
 wire [7:0] ps2_code;
 wire ps2_kind, ps2_wr;
 wire osd_wr, osd_en, osd_zoom;
+wire [7:0] img_wp;
+// the disks: the mounter of kg_mcu2 (the sector interface of img_sdc) to v06c_system
+wire [7:0] sdc_img_mounted, sdc_rd, sdc_wr, sdc_byte_in_data, sdc_byte_out_data;
+wire [63:0] sdc_img_size;
+wire [31:0] sdc_sector;
+wire sdc_busy, sdc_done, sdc_error, sdc_byte_in_strobe;
+wire [2:0] sdc_slot;
+wire [8:0] sdc_byte_addr;
 wire [11:0] osd_waddr;
 wire [7:0] osd_wdata;
 wire [23:0] osd_fg, osd_bg;
@@ -221,11 +231,12 @@ wire [3:0] osd_py;
 wire [5:0] osd_pw;
 
 kg_mcu2 #(
-	.CAPS(16'h0000),
+	.CAPS(16'h0004),     // write protected images
 	.SW_N(SW_N),
 	.CS_FILTER(3),
 	.ENABLE_OSD(1),
-	.ENABLE_IMG(0),      // the floppy: phase 2
+	.ENABLE_IMG(1),      // the floppy images of the F items
+	.IMG_OUT_LATENCY(3),
 	.ENABLE_FT(1),
 	.ENABLE_SD2(1)
 ) mcu (
@@ -255,12 +266,12 @@ kg_mcu2 #(
 	.OSD_FG(osd_fg), .OSD_BG(osd_bg), .OSD_ALPHA(osd_alpha), .OSD_PX(osd_px), .OSD_PY(osd_py),
 	.OSD_PW(osd_pw), .OSD_PH(osd_ph), .OSD_PLACE(osd_place), .OSD_ZOOM(osd_zoom),
 
-	.SDC_IMG_MOUNTED(), .SDC_IMG_SIZE(),
-	.SDC_RD(8'd0), .SDC_WR(8'd0), .SDC_SECTOR(32'd0),
-	.SDC_BUSY(), .SDC_DONE(), .SDC_ERROR(), .SDC_SLOT(),
-	.SDC_BYTE_IN_STROBE(), .SDC_BYTE_ADDR(),
-	.SDC_BYTE_IN_DATA(), .SDC_BYTE_OUT_DATA(8'd0),
-	.IMG_WP(), .IMG_PHYS_WR(), .IMG_PHYS(), .IMG_FLUSH(), .FDD_CHNG_WR(), .FDD_CHNG(),
+	.SDC_IMG_MOUNTED(sdc_img_mounted), .SDC_IMG_SIZE(sdc_img_size),
+	.SDC_RD(sdc_rd), .SDC_WR(sdc_wr), .SDC_SECTOR(sdc_sector),
+	.SDC_BUSY(sdc_busy), .SDC_DONE(sdc_done), .SDC_ERROR(sdc_error), .SDC_SLOT(sdc_slot),
+	.SDC_BYTE_IN_STROBE(sdc_byte_in_strobe), .SDC_BYTE_ADDR(sdc_byte_addr),
+	.SDC_BYTE_IN_DATA(sdc_byte_in_data), .SDC_BYTE_OUT_DATA(sdc_byte_out_data),
+	.IMG_WP(img_wp), .IMG_PHYS_WR(), .IMG_PHYS(), .IMG_FLUSH(), .FDD_CHNG_WR(), .FDD_CHNG(),
 	.FDD_CHNG_REQ(1'b0), .FDD_CHNG_DS(2'd0), .IMG_ACTIVE(),
 
 	.PORT_OUT_DATA(), .PORT_OUT_WR(), .PORT_OUT_READY(4'b1111), .PORT_IN_DATA(32'd0), .PORT_IN_WR(4'd0),
@@ -298,11 +309,11 @@ assign SD_CLK = mcu_sck_ibufg;
 
 // ------------------------------------------------------------------ soft switches
 
-wire sw_turbo = sw[4*8];
-wire sw_pal_keep = sw[5*8];
-wire sw_reset = sw[6*8];
-wire sw_start = sw[7*8];
-wire sw_cold = sw[8*8];
+wire sw_turbo = sw[6*8];
+wire sw_pal_keep = sw[7*8];
+wire sw_reset = sw[8*8];
+wire sw_start = sw[9*8];
+wire sw_cold = sw[10*8];
 
 // the triggers as pulses
 reg [2:0] trg_d = 3'd0;
@@ -342,6 +353,10 @@ v06c_system sys (
 	.file_addr(ld_addr),
 	.file_data(ld_data),
 	.file_wr(file_wr),
+	.sdc_img_mounted(sdc_img_mounted), .sdc_img_size(sdc_img_size), .sdc_rd(sdc_rd), .sdc_wr(sdc_wr),
+	.sdc_sector(sdc_sector), .sdc_busy(sdc_busy), .sdc_done(sdc_done), .sdc_error(sdc_error), .sdc_slot(sdc_slot),
+	.sdc_byte_in_strobe(sdc_byte_in_strobe), .sdc_byte_addr(sdc_byte_addr), .sdc_byte_in_data(sdc_byte_in_data),
+	.sdc_byte_out_data(sdc_byte_out_data), .img_wp(img_wp),
 	.kb_scancode(kb_code_r),
 	.kb_scancode_upd(kb_upd_t),
 	.joy_a(joy_a),
@@ -363,6 +378,7 @@ v06c_system sys (
 	.running(),
 	.cpu_addr(),
 	.cpu_int_ack(),
+	.dbg_io_wr(), .dbg_io_rd(), .dbg_dout(), .dbg_din(), .dbg_m1(),
 	.MA(MA),
 	.MD(MD),
 	.MWR_N(MWR_N)

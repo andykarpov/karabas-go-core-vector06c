@@ -18,6 +18,18 @@ module tb_v06c (
 	input  wire [31:0] file_addr,
 	input  wire  [7:0] file_data,
 	input  wire        file_wr,
+	// the img_* stream of link v1 (the mcu model of sim_v06c) through img_sdc to the sdc_* of the system
+	input  wire  [7:0] img_mounted,
+	input  wire [63:0] img_size,
+	input  wire        img_data_wr,
+	input  wire  [8:0] img_data_addr,
+	input  wire  [7:0] img_data,
+	input  wire        img_result_wr,
+	input  wire  [7:0] img_result,
+	input  wire [15:0] img_sum,
+	output wire        img_q_wr,
+	output wire [23:0] img_q_di,
+	input  wire        img_q_ack,
 	input  wire  [7:0] kb_scancode,
 	input  wire        kb_scancode_upd,
 	input  wire  [7:0] joy_a,
@@ -37,6 +49,7 @@ module tb_v06c (
 	output wire        dbg_io_rd,
 	output wire  [7:0] dbg_dout,
 	output wire  [7:0] dbg_din,
+	output wire        dbg_m1,
 	output wire [23:0] o_rgb,
 	output wire        o_hs,
 	output wire        o_vs,
@@ -44,6 +57,24 @@ module tb_v06c (
 	output wire        o_ce,
 	input  wire [21:0] dbg_addr,
 	output wire  [7:0] dbg_q
+);
+
+wire [7:0] sdc_img_mounted, sdc_rd, sdc_wr, sdc_in_data, sdc_out;
+wire [63:0] sdc_img_size;
+wire [31:0] sdc_sector;
+wire sdc_busy, sdc_done, sdc_error, sdc_in_strobe;
+wire [2:0] sdc_slot;
+wire [8:0] sdc_byte_addr;
+
+img_sdc #(.OUT_LATENCY(3), .TIMEOUT(24'd9600000)) sdc (
+	.clk(clk), .reset(1'b0),
+	.img_mounted(img_mounted), .img_size(img_size), .img_data_wr(img_data_wr), .img_data_addr(img_data_addr),
+	.img_data(img_data), .img_result_wr(img_result_wr), .img_result(img_result), .img_sum(img_sum),
+	.img_q_wr(img_q_wr), .img_q_di(img_q_di), .img_q_ack(img_q_ack),
+	.sdc_img_mounted(sdc_img_mounted), .sdc_img_size(sdc_img_size), .sdc_rd(sdc_rd), .sdc_wr(sdc_wr),
+	.sdc_sector(sdc_sector), .sdc_busy(sdc_busy), .sdc_done(sdc_done), .sdc_error(sdc_error), .sdc_slot(sdc_slot),
+	.sdc_byte_in_strobe(sdc_in_strobe), .sdc_byte_addr(sdc_byte_addr), .sdc_byte_in_data(sdc_in_data),
+	.sdc_byte_out_data(sdc_out), .active()
 );
 
 wire [20:0] MA;
@@ -54,10 +85,14 @@ v06c_system sys (
 	.clk(clk), .reset(reset), .turbo(turbo), .rst_boot(rst_boot), .rst_app(rst_app), .rst_cold(rst_cold), .pal_keep(1'b0),
 	.rom_active(rom_active), .rom_addr(rom_addr), .rom_data(rom_data), .rom_wr(rom_wr),
 	.file_active(file_active), .file_slot(file_slot), .file_addr(file_addr), .file_data(file_data), .file_wr(file_wr),
+	.sdc_img_mounted(sdc_img_mounted), .sdc_img_size(sdc_img_size), .sdc_rd(sdc_rd), .sdc_wr(sdc_wr),
+	.sdc_sector(sdc_sector), .sdc_busy(sdc_busy), .sdc_done(sdc_done), .sdc_error(sdc_error), .sdc_slot(sdc_slot),
+	.sdc_byte_in_strobe(sdc_in_strobe), .sdc_byte_addr(sdc_byte_addr), .sdc_byte_in_data(sdc_in_data),
+	.sdc_byte_out_data(sdc_out), .img_wp(8'd0),
 	.kb_scancode(kb_scancode), .kb_scancode_upd(kb_scancode_upd), .joy_a(joy_a), .joy_b(8'd0), .tape_in(1'b0),
 	.pal(pal), .rgb(rgb), .hblank(hblank), .vblank(vblank), .hsync(hsync), .vsync(vsync), .de(), .hc(hc), .vc(vc), .ce_pix(ce_pix),
 	.audio_l(audio_l), .audio_r(), .tape_out(),
-	.running(running), .cpu_addr(cpu_addr), .cpu_int_ack(cpu_int_ack), .dbg_io_wr(dbg_io_wr), .dbg_io_rd(dbg_io_rd), .dbg_dout(dbg_dout), .dbg_din(dbg_din),
+	.running(running), .cpu_addr(cpu_addr), .cpu_int_ack(cpu_int_ack), .dbg_io_wr(dbg_io_wr), .dbg_io_rd(dbg_io_rd), .dbg_dout(dbg_dout), .dbg_din(dbg_din), .dbg_m1(dbg_m1),
 	.MA(MA), .MD(MD), .MWR_N(MWR_N)
 );
 
